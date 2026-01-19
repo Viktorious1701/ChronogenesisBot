@@ -1,0 +1,22 @@
+# Secrets (NEVER COMMIT THESE)
+.env
+.env.local
+
+# Python compiled files
+__pycache__/
+*.py[cod]
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Scraper Data & Logs
+output/
+history/
+*.log
+*.csv
+*.json
+
+# VS Code settings (optional)
+.vscode/
