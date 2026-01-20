@@ -67,7 +67,7 @@ class ChrononesisClubScraper:
             # Step 2: Wait for table to appear with timeout
             print("   Step 2: Waiting for member table to appear (up to 15 seconds)...")
             try:
-                await self.page.wait_for_selector('table.club-member-table', timeout=15000)
+                await self.page.wait_for_selector('table.club-member-table', timeout=7000)
                 print("   ✅ Table appeared!")
             except Exception as e:
                 print(f"   ⚠️ Table selector timeout: {e}")

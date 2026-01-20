@@ -5,6 +5,10 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
+# --- DATABASE IMPORT ---
+# We import the DatabaseManager to handle long-term storage
+from database import DatabaseManager
+
 # --- PATH SETUP ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 scraper_path = os.path.join(current_dir, 'chronogenesis_scraper')
@@ -21,28 +25,34 @@ logger = logging.getLogger('discord_bot')
 class ChrononesisClubScraperBot:
     def __init__(self, output_dir):
         self.output_dir = Path(output_dir)
-        self.history_dir = Path(current_dir) / 'history'
-
         self.output_dir.mkdir(exist_ok=True)
-        self.history_dir.mkdir(exist_ok=True)
 
+        # 1. Initialize the Scraper Engine
         self.engine = ChrononesisClubScraper(output_dir=str(self.output_dir))
+        
+        # 2. Initialize the Database Manager
+        # This creates 'club_data.db' if it doesn't exist
+        self.db = DatabaseManager()
 
     async def run_scrape(self, club_name):
-        """Runs scraper, processes data, and saves history backup"""
+        """Runs scraper, processes data, and saves to Database"""
         try:
             logger.info(f"🕸️ Starting scrape for {club_name}...")
 
-            # 1. Scrape (Overwrites club_members.json)
+            # 1. Run the Scraper (Overwrites club_members.json)
             await self.engine.scrape_club(club_name)
 
-            # 2. Load the data
+            # 2. Load the fresh data from the file
             current_data = self._load_current_data()
+            
             if not current_data:
+                logger.warning("⚠️ Scrape finished but no data found.")
                 return None
 
-            # 3. Save a backup to history folder (Silent background task)
-            self._save_to_history(current_data)
+            # 3. SAVE TO DATABASE (The Time Machine)
+            # This allows us to calculate monthly/weekly rankings later
+            logger.info("💾 Saving snapshot to SQLite Database...")
+            self.db.save_snapshot(current_data)
 
             return current_data
 
@@ -59,19 +69,9 @@ class ChrononesisClubScraperBot:
             data = json.load(f)
         return self._normalize_data(data)
 
-    def _save_to_history(self, clean_data):
-        """Saves a timestamped copy for long-term storage"""
-        today = datetime.now().strftime('%Y-%m-%d')
-        history_file = self.history_dir / f"members_{today}.json"
-
-        # Don't overwrite if it exists, to preserve the first scrape of the day
-        if not history_file.exists():
-            with open(history_file, 'w', encoding='utf-8') as f:
-                json.dump(clean_data, f, indent=2, ensure_ascii=False)
-
     def _normalize_data(self, raw_data):
         """
-        Parses the strings from the website into Numbers for the bot.
+        Parses the strings from the website into Numbers for the bot/database.
         """
         members_list = raw_data.get('members', [])
         cleaned = []
@@ -88,7 +88,6 @@ class ChrononesisClubScraperBot:
             # This is the GREEN text from the website
             change_str = str(m.get('fan_change', '0'))
             try:
-                # Remove '+' and ',' and convert to integer
                 change_int = int(change_str.replace(',', '').replace('+', ''))
             except ValueError:
                 change_int = 0

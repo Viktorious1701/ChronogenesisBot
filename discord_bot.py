@@ -1,11 +1,12 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import *
 from scraper_integration import ChrononesisClubScraperBot
@@ -27,7 +28,7 @@ scrape_lock = asyncio.Lock()
 
 # --- CLUB RULES ---
 WEEKLY_REQ = 3_000_000
-DAILY_REQ = WEEKLY_REQ / 7  # 428,571 fans
+DAILY_REQ = WEEKLY_REQ / 7
 
 
 @bot.event
@@ -38,7 +39,12 @@ async def on_ready():
         scheduler.add_job(daily_routine, CronTrigger(
             hour=h, minute=m, timezone=TIMEZONE), id='daily_scrape')
         scheduler.start()
-    await bot.tree.sync()
+
+    try:
+        synced = await bot.tree.sync()
+        logger.info(f"🔄 Synced {len(synced)} commands.")
+    except Exception as e:
+        logger.error(f"❌ Failed to sync commands: {e}")
 
 
 async def daily_routine():
@@ -52,7 +58,6 @@ async def run_and_notify(interaction=None):
             await interaction.followup.send(msg)
         return
 
-    # Run the Scraper
     async with scrape_lock:
         data = await scraper_bot.run_scrape(CLUB_NAME)
 
@@ -62,45 +67,31 @@ async def run_and_notify(interaction=None):
             await interaction.followup.send(msg)
         return
 
-    # Sort by Daily Gain (Highest to Lowest)
     data.sort(key=lambda x: x['gain'], reverse=True)
-
-    # Calculate Totals
     total_gain = sum(d['gain'] for d in data)
 
-    # Create Embed
     embed = discord.Embed(
         title=f"📊 Daily Check: {CLUB_NAME}",
         description=f"**Target:** {int(DAILY_REQ):,}/day (3M/week)",
         timestamp=datetime.now(),
-        color=discord.Color.from_rgb(46, 204, 113)  # Green
+        color=discord.Color.green()
     )
+    embed.add_field(name="Club Total",
+                    value=f"📈 **+{total_gain:,}** fans today", inline=False)
 
-    embed.add_field(
-        name="Club Total",
-        value=f"📈 **+{total_gain:,}** fans today",
-        inline=False
-    )
-
-    # Generate Member List with Status Icons
     desc_text = ""
     for i, m in enumerate(data, 1):
         gain = m['gain']
-
-        # --- ICON LOGIC ---
         if gain >= 1_000_000:
-            icon = "🔥"  # Carrying the club
+            icon = "🔥"
         elif gain >= DAILY_REQ:
-            icon = "✅"  # Safe (Met 430k)
+            icon = "✅"
         elif gain > 0:
-            icon = "⚠️"  # Falling behind (< 430k)
+            icon = "⚠️"
         else:
-            icon = "💤"  # Slacking (0 gain)
+            icon = "💤"
 
-        # Line format: #01 ⚠️ Name (+Gain)
         line = f"`#{i:02}` {icon} **{m['name']}**: +{gain:,}\n"
-
-        # Discord Embed Field Limit is 1024 chars
         if len(desc_text) + len(line) > 1000:
             embed.add_field(name="Member Performance",
                             value=desc_text, inline=False)
@@ -112,9 +103,6 @@ async def run_and_notify(interaction=None):
         embed.add_field(name="Member Performance",
                         value=desc_text, inline=False)
 
-    embed.set_footer(text="🔥=1M+ | ✅=On Track | ⚠️=Behind Pace | 💤=Zero")
-
-    # Send Message
     if interaction:
         await interaction.followup.send(embed=embed)
     else:
@@ -123,11 +111,101 @@ async def run_and_notify(interaction=None):
             if channel:
                 await channel.send(embed=embed)
 
+# ==================== COMMANDS ====================
 
-@bot.tree.command(name="scrape_now", description="Force update")
+
+@bot.tree.command(name="scrape_now", description="Force update (Admin)")
 async def scrape_now(interaction: discord.Interaction):
+    # Optional Security Check
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("⛔ Admin only.", ephemeral=True)
+        return
     await interaction.response.defer()
     await run_and_notify(interaction)
 
+
+@bot.tree.command(name="leaderboard", description="Show rankings over time")
+@app_commands.choices(period=[
+    app_commands.Choice(name="📅 Current Month", value="monthly"),
+    app_commands.Choice(name="📅 Current Week", value="weekly"),
+])
+async def leaderboard(interaction: discord.Interaction, period: app_commands.Choice[str]):
+    await interaction.response.defer()
+    now = datetime.now()
+    if period.value == "monthly":
+        start_date = now.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start_date = (now - timedelta(days=now.weekday())
+                      ).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    rankings = scraper_bot.db.get_leaderboard(start_date.isoformat())
+
+    if not rankings:
+        await interaction.followup.send("⚠️ No history data found yet.")
+        return
+
+    embed = discord.Embed(title=f"🏆 {period.name}", color=discord.Color.gold())
+    desc_text = ""
+    for i, m in enumerate(rankings, 1):
+        line = f"`#{i}` **{m['current_name']}**: +{m['period_gain']:,}\n"
+        if len(desc_text) + len(line) > 1000:
+            embed.add_field(name="Rankings", value=desc_text, inline=False)
+            desc_text = line
+        else:
+            desc_text += line
+    if desc_text:
+        embed.add_field(name="Rankings", value=desc_text, inline=False)
+
+    await interaction.followup.send(embed=embed)
+
+# --- NEW ADMIN COMMAND ---
+
+
+@bot.tree.command(name="member_lookup", description="Admin: Check lifetime stats for a specific member")
+@app_commands.describe(name="Partial name of the member")
+async def member_lookup(interaction: discord.Interaction, name: str):
+    # 🔒 AUTHORIZATION CHECK 🔒
+    # Only users with the 'Administrator' role permission can pass this block.
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("⛔ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    # Query Database
+    stats = scraper_bot.db.lookup_member(name)
+
+    if not stats:
+        await interaction.followup.send(f"❌ Could not find member matching '**{name}**'.")
+        return
+
+    # Format Dates
+    try:
+        f_date = datetime.fromisoformat(
+            stats['first_seen']).strftime('%Y-%m-%d')
+        l_date = datetime.fromisoformat(
+            stats['last_seen']).strftime('%Y-%m-%d')
+    except:
+        f_date = str(stats['first_seen'])[:10]
+        l_date = str(stats['last_seen'])[:10]
+
+    embed = discord.Embed(
+        title=f"👤 Member File: {stats['name']}", color=discord.Color.dark_teal())
+    embed.add_field(name="🆔 ID", value=stats['id'], inline=True)
+    embed.add_field(name="📅 Tracked Since", value=f_date, inline=True)
+    embed.add_field(name="📉 Original Fans",
+                    value=f"{stats['original_fans']:,}", inline=True)
+    embed.add_field(name="📈 Current Fans",
+                    value=f"{stats['current_fans']:,}", inline=True)
+    embed.add_field(name="💰 Lifetime Accumulation",
+                    value=f"**+{stats['accumulated_fans']:,}**", inline=False)
+    embed.set_footer(text=f"Data range: {f_date} to {l_date}")
+
+    await interaction.followup.send(embed=embed)
+
 if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+    if not DISCORD_TOKEN:
+        print("❌ Error: DISCORD_TOKEN missing in .env")
+    else:
+        bot.run(DISCORD_TOKEN)
