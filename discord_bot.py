@@ -34,15 +34,30 @@ DAILY_REQ = WEEKLY_REQ / 7
 @bot.event
 async def on_ready():
     logger.info(f'✅ Bot online as {bot.user}')
+
+    # 1. Start the Schedule
     if not scheduler.running:
         h, m = map(int, NOTIFICATION_TIME.split(':'))
         scheduler.add_job(daily_routine, CronTrigger(
             hour=h, minute=m, timezone=TIMEZONE), id='daily_scrape')
         scheduler.start()
 
+    # 2. FORCE INSTANT SYNC (The Fix)
     try:
-        synced = await bot.tree.sync()
-        logger.info(f"🔄 Synced {len(synced)} commands.")
+        # We grab the Guild ID from your config dictionary
+        # This ensures we are syncing ONLY to the server you are using
+        target_guild_id = list(NOTIFICATION_CHANNELS.keys())[0]
+        guild_object = discord.Object(id=target_guild_id)
+
+        # This copies the commands to your specific server
+        bot.tree.copy_global_to(guild=guild_object)
+
+        # This performs the sync instantly
+        synced = await bot.tree.sync(guild=guild_object)
+        logger.info(
+            f"🔄 INSTANTLY Synced {len(synced)} commands to Guild ID {target_guild_id}")
+        print(f"🔄 INSTANTLY Synced {len(synced)} commands. Check Discord now!")
+
     except Exception as e:
         logger.error(f"❌ Failed to sync commands: {e}")
 
