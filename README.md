@@ -117,13 +117,51 @@ python discord_bot.py
 ```
 *You should see: `✅ Bot online as [BotName]`*
 
-### Commands
-Type these in your Discord server:
 
-*   `/scrape_now` - **(Admin Only)** Forces an immediate scrape, updates the data, and posts the report.
-*   **Automatic** - The bot will silently run every day at the time specified in `.env`.
+## 🎮 Command Reference
+
+### 👥 Public Commands
+*Available to all server members.*
+
+#### `/leaderboard`
+View the club rankings based on **actual fan gains** over a specific period. This uses the database history to calculate exactly how much each member contributed.
+
+*   **Parameters:**
+    *   `period`: Choose between **Current Month** or **Current Week** (Mon-Sun).
+*   **How it works:**
+    *   It subtracts the [Current Fans] from the [Fans at Start of Period].
+    *   *Note: This requires at least 2 days of history data to function.*
 
 ---
+
+### 🛡️ Admin Commands
+*Restricted to users with the **Administrator** permission in Discord.*
+
+#### `/scrape_now`
+Forces the bot to run the scraper immediately.
+*   **What it does:**
+    1.  Launches the stealth browser.
+    2.  Fetches live data from the game website.
+    3.  Updates the database history.
+    4.  Posts the **Daily Report** (showing today's Green Number gains) to the channel.
+*   **Use case:** If the automatic schedule missed a run, or if you want to check stats mid-day.
+
+#### `/member_lookup`
+Check the "Lifetime Performance" of a specific member.
+*   **Parameters:**
+    *   `name`: The partial name of the member (e.g., "Sam" will find "Samur4i").
+*   **What it shows:**
+    *   **First Tracked:** Date when the bot first saw them.
+    *   **Original Fans:** How many fans they had on day 1.
+    *   **Current Fans:** Their total right now.
+    *   **💰 Lifetime Accumulation:** The total amount of fans they have earned while being tracked by the bot.
+
+---
+
+### ⏰ Automatic Behavior
+The bot contains an internal scheduler (APScheduler).
+*   **Daily Routine:** It runs silently every day at the time specified in your `.env` file (Default: `08:00`).
+*   **Action:** It performs the same action as `/scrape_now`, posting the Daily Report automatically to your configured channel.
 
 ## 📂 Project Structure
 
